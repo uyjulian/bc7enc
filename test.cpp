@@ -424,6 +424,186 @@ static bool save_dds(const char *pFilename, uint32_t width, uint32_t height, con
 	return true;
 }
 
+static bool load_dds(const char *pFilename, uint32_t *width, uint32_t *height, void **ppBlocks, uint32_t *pixel_format_bpp, DXGI_FORMAT *dxgi_format)
+{
+	FILE *pFile = NULL;
+	pFile = fopen(pFilename, "rb");
+	if (!pFile)
+	{
+		fprintf(stderr, "Failed opening file %s!\n", pFilename);
+		return false;
+	}
+
+	uint32_t magic = 0;
+	fread(&magic, sizeof(magic), 1, pFile);
+	if (magic != 0x20534444)
+	{
+		fprintf(stderr, "Incorrect DDS magic\n");
+		fclose(pFile);
+		return false;
+	}
+
+	DDSURFACEDESC2 desc;
+	memset(&desc, 0, sizeof(desc));
+	fread(&desc, sizeof(desc), 1, pFile);
+
+	if (desc.dwSize != sizeof(desc))
+	{
+		fprintf(stderr, "Incorrect desc size\n");
+		fclose(pFile);
+		return false;
+	}
+
+	if ((desc.dwFlags & DDSD_WIDTH) == 0 || (desc.dwFlags & DDSD_HEIGHT) == 0 || (desc.dwFlags & DDSD_PIXELFORMAT) == 0 || (desc.dwFlags & DDSD_CAPS) == 0 || (desc.dwFlags & DDSD_LINEARSIZE) == 0)
+	{
+		fprintf(stderr, "Incorrect flags\n");
+		fclose(pFile);
+		return false;
+	}
+
+	*width = desc.dwWidth;
+	*height = desc.dwHeight;
+
+	if ((desc.ddsCaps.dwCaps & DDSCAPS_TEXTURE) == 0)
+	{
+		fprintf(stderr, "Incorrect caps\n");
+		fclose(pFile);
+		return false;
+	}
+
+	if (desc.ddpfPixelFormat.dwSize != sizeof(desc.ddpfPixelFormat))
+	{
+		fprintf(stderr, "Incorrect pixel format size\n");
+		fclose(pFile);
+		return false;
+	}
+
+	if ((desc.ddpfPixelFormat.dwFlags & DDPF_FOURCC) == 0)
+	{
+		fprintf(stderr, "Incorrect pixel format flags\n");
+		fclose(pFile);
+		return false;
+	}
+
+	void *pBlocks = malloc(desc.lPitch);
+	if (pBlocks == NULL)
+	{
+		fprintf(stderr, "OOM\n");
+		fclose(pFile);
+		return false;
+	}
+
+	if (desc.ddpfPixelFormat.dwRGBBitCount != 0)
+	{
+		fprintf(stderr, "Incorrect RGB bit count\n");
+		fclose(pFile);
+		return false;
+	}
+
+	switch(desc.ddpfPixelFormat.dwFourCC)
+	{
+		case ((uint32_t)PIXEL_FMT_FOURCC('D', 'X', '1', '0')):
+		{
+			DDS_HEADER_DXT10 hdr10;
+			memset(&hdr10, 0, sizeof(hdr10));
+			fread(&hdr10, sizeof(hdr10), 1, pFile);
+
+			if (hdr10.resourceDimension != D3D10_RESOURCE_DIMENSION_TEXTURE2D)
+			{
+				fprintf(stderr, "Incorrect resource dimension\n");
+				fclose(pFile);
+				return false;
+			}
+
+			if (hdr10.arraySize != 1)
+			{
+				fprintf(stderr, "Incorrect array size\n");
+				fclose(pFile);
+				return false;
+			}
+
+			switch(hdr10.dxgiFormat)
+			{
+				case DXGI_FORMAT_BC1_UNORM:
+				case DXGI_FORMAT_BC3_UNORM:
+				case DXGI_FORMAT_BC4_UNORM:
+				case DXGI_FORMAT_BC5_UNORM:
+				case DXGI_FORMAT_BC7_UNORM:
+				{
+					*dxgi_format = hdr10.dxgiFormat;
+					break;
+				}
+				default:
+				{
+					fprintf(stderr, "Incorrect texture format (DX10)\n");
+					fclose(pFile);
+					return false;
+				}
+			}
+			break;
+		}
+		case ((uint32_t)PIXEL_FMT_FOURCC('D', 'X', 'T', '1')):
+		{
+			*dxgi_format = DXGI_FORMAT_BC1_UNORM;
+			break;
+		}
+		case ((uint32_t)PIXEL_FMT_FOURCC('D', 'X', 'T', '5')):
+		{
+			*dxgi_format = DXGI_FORMAT_BC3_UNORM;
+			break;
+		}
+		case ((uint32_t)PIXEL_FMT_FOURCC('A', 'T', 'I', '1')):
+		{
+			*dxgi_format = DXGI_FORMAT_BC4_UNORM;
+			break;
+		}
+		case ((uint32_t)PIXEL_FMT_FOURCC('A', 'T', 'I', '2')):
+		{
+			*dxgi_format = DXGI_FORMAT_BC5_UNORM;
+			break;
+		}
+		default:
+		{
+			fprintf(stderr, "Incorrect texture format (DX9)\n");
+			fclose(pFile);
+			return false;
+		}
+	}
+
+	switch(*dxgi_format)
+	{
+		case DXGI_FORMAT_BC3_UNORM:
+		case DXGI_FORMAT_BC5_UNORM:
+		case DXGI_FORMAT_BC7_UNORM:
+		{
+			*pixel_format_bpp = 8;
+		}
+		case DXGI_FORMAT_BC1_UNORM:
+		case DXGI_FORMAT_BC4_UNORM:
+		{
+			*pixel_format_bpp = 4;
+		}
+		default:
+		{
+			fprintf(stderr, "Unknown DXGI format\n");
+			fclose(pFile);
+			return false;
+		}
+	}
+
+	if (desc.lPitch != fread(pBlocks, desc.lPitch, 1, pFile))
+	{
+		fprintf(stderr, "Could not read all specified image data\n");
+		fclose(pFile);
+		return false;
+	}
+	*ppBlocks = pBlocks;
+
+	fclose(pFile);
+
+	return true;
+}
+
 static void strip_extension(std::string &s)
 {
 	for (int32_t i = (int32_t)s.size() - 1; i >= 0; i--)

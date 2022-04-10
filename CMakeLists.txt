@@ -55,4 +55,5 @@ if (NOT MSVC)
 	target_link_libraries(bc7enc m)
 endif()
 
+set_property(TARGET bc7enc PROPERTY CXX_STANDARD 11)
 
